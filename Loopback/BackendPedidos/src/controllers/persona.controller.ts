@@ -1,3 +1,4 @@
+import { service } from '@loopback/core';
 import {
   Count,
   CountSchema,
@@ -16,15 +17,51 @@ import {
   del,
   requestBody,
   response,
+  HttpErrors,
 } from '@loopback/rest';
-import {Persona} from '../models';
+import {Credenciales, Persona} from '../models';
 import {PersonaRepository} from '../repositories';
+import { AutenticacionService } from '../services';
+import { Llaves } from '../config/llaves';
+//import nodeFetch, { RequestInfo, RequestInit } from 'node-fetch';
+//const fetch = (url: RequestInfo, init?: RequestInit) => import('node-fetch').then(({default: fetch}) => nodeFetch(url, init));
+const fetch = require('node-fetch');
+
 
 export class PersonaController {
   constructor(
     @repository(PersonaRepository)
     public personaRepository : PersonaRepository,
-  ) {}
+    @service(AutenticacionService)
+    public servicioAutenticacion : AutenticacionService,
+  ) { }
+
+  @post('/identificarPersona', {
+    responses:{
+      '200':{
+        description: "Identificación de usuarios"
+      }
+    }
+  })
+  async identificarPersona(
+    @requestBody() credenciales: Credenciales
+  ) {
+    let p = await this.servicioAutenticacion.IdentificarPersona(credenciales.Usuario, credenciales.Clave);
+    if (p) {
+      let token = this.servicioAutenticacion.GenerarTokenJWT(p);
+      return{
+        datos: {
+          nombre: p.Nombres,
+          correo: p.Correo,
+          id: p.Id
+        },
+        tk: token
+      }
+    } else {
+      throw new HttpErrors[401]("Datos inválidos");
+    }
+  }
+
 
   @post('/personas')
   @response(200, {
@@ -44,7 +81,22 @@ export class PersonaController {
     })
     persona: Omit<Persona, 'Id'>,
   ): Promise<Persona> {
-    return this.personaRepository.create(persona);
+
+    let clave = this.servicioAutenticacion.GenerarClave();
+    let claveCifrada = this.servicioAutenticacion.CifrarClave(clave);
+    persona.Clave = claveCifrada;
+    let p = await this.personaRepository.create(persona);
+
+    // Notificar al usuario
+    let destino = persona.Correo;
+    let asunto = 'Registro en la plataforma';
+    let contenido = `Hola ${persona.Nombres}, su nombre de usuario es: ${persona.Correo} y su contraseña es: ${clave}`;
+    fetch(`${Llaves.urlServicioNotificaciones}/envio-correo?correo_destino=${destino}&asunto=${asunto}&contenido=${contenido}`)
+      .then((data: any) => {
+        console.log(data);
+      })
+    return p;
+
   }
 
   @get('/personas/count')
